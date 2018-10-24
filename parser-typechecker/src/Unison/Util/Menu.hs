@@ -4,7 +4,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications    #-}
 
-module Unison.Util.Menu (menu1, menuN, groupMenu1) where
+module Unison.Util.Menu (renderGroups) where
 
 import           Control.Monad         (when)
 import           Data.List             (find, isPrefixOf)
@@ -21,6 +21,42 @@ type Caption = StyledText
 type Stylized = StyledText
 type Keyword = String
 type Console = IO String
+
+renderGroups :: forall a
+             .  (a -> Stylized)
+             -> [[a]]
+             -> Stylized
+renderGroups render groups = intercalateMap "\n" format numberedGroups
+  where
+    numberedGroups :: [([a], Int)]
+    numberedGroups = zip groups [1..]
+    numberWidth = (1+) . floor @Double . logBase 10 . fromIntegral $ length groups
+    format :: ([a], Int) -> Stylized
+    format (as, number) =
+      intercalateMap
+        "\n"
+        (format1 number (length as))
+        (zip as [0..])
+    format1 :: Int -> Int -> (a, Int) -> Stylized
+    format1 groupNumber groupSize (a, index) =
+      header <> bracket <> render a
+      where
+        header :: (Semigroup s, IsString s) => s
+        header =
+          if representativeRow
+          then fromString (strPadLeft ' ' numberWidth (show groupNumber)) <> ". "
+          else fromString $ replicate (numberWidth + 3) ' '
+        representativeRow :: Bool
+        representativeRow = index == (groupSize - 1) `div` 2
+        bracket :: IsString s => s
+        bracket =
+          if maxGroupSize > 1 then
+            if groupSize == 1             then "╶"
+            else if index == 0            then "┌"
+            else if index < groupSize - 1 then "│"
+            else                               "└"
+          else ""
+        maxGroupSize = maximum (length <$> groups)
 
 renderChoices :: forall a mc
               .  (a -> Stylized)
@@ -83,7 +119,7 @@ renderChoices render renderMeta groups metas isSelected =
 
  -}
 
-menu1 :: forall a mc
+_menu1 :: forall a mc
       . Console
       -> Caption
       -> (a -> Stylized)
@@ -92,7 +128,7 @@ menu1 :: forall a mc
       -> [(Keyword, mc)]
       -> Maybe Keyword
       -> IO (Maybe (Either mc a))
-menu1 console caption render renderMeta groups metas initial = do
+_menu1 console caption render renderMeta groups metas initial = do
   let groups' = [ ([k], [a]) | (k, a) <- groups ]
       metas' = [ ([k], mc) | (k, mc) <- metas ]
   groupMenu1 console caption render renderMeta groups' metas' initial >>= \case
@@ -201,7 +237,7 @@ groupMenu1 console caption render renderMeta groups metas initial = do
    >> *
 
  -}
-menuN :: Console
+_menuN :: Console
       -> Caption
       -> (a -> Stylized)
       -> (mc -> Stylized)
@@ -209,4 +245,4 @@ menuN :: Console
       -> [([Keyword], mc)]
       -> [Keyword]
       -> IO (Either mc [[a]])
-menuN _console _caption _render _renderMeta _groups _metas _initials = pure (Right [])
+_menuN _console _caption _render _renderMeta _groups _metas _initials = pure (Right [])

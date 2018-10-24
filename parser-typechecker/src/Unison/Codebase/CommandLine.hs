@@ -9,20 +9,18 @@ import           Control.Exception            (finally)
 import           Control.Monad                (forM_, forever, liftM2,
                                                void, when)
 import           Control.Monad.STM            (STM, atomically)
-import qualified Data.Char                    as Char
-import           Data.Foldable                (toList, traverse_)
-import           Data.IORef                   (newIORef, writeIORef)
-import           Data.List                    (find, isSuffixOf,
-                                               sort)
+import           Data.Foldable
+import           Data.IORef                   (IORef, newIORef, writeIORef)
+import           Data.List
 import           Data.Set                     (Set)
 import qualified Data.Set                     as Set
-import           Data.String                  (fromString)
-import           Data.Strings                 (strPadLeft)
+-- import           Data.String
+-- import           Data.Strings
 import           Data.Text                    (Text, pack, unpack)
 import qualified Data.Text.IO
 import qualified System.Console.ANSI          as Console
 import           System.FilePath              (FilePath)
-import qualified Text.Read                    as Read
+-- import qualified Text.Read                    as Read
 import           Unison.Codebase              (Codebase)
 import qualified Unison.Codebase              as Codebase
 import           Unison.Codebase.Branch       (Branch)
@@ -42,7 +40,7 @@ import qualified Unison.Result                as Result
 import qualified Unison.Typechecker.Context   as C
 import qualified Unison.UnisonFile            as UF
 import qualified Unison.Util.ColorText        as Color
-import qualified Unison.Util.Menu             as Menu
+-- import qualified Unison.Util.Menu             as Menu
 import           Unison.Util.Monoid
 import           Unison.Util.TQueue           (TQueue)
 import qualified Unison.Util.TQueue           as TQueue
@@ -55,8 +53,6 @@ data Event
 
 allow :: FilePath -> Bool
 allow = liftM2 (||) (".u" `isSuffixOf`) (".uu" `isSuffixOf`)
-
-data CreateCancel = Create | Cancel deriving Show
 
 main :: forall v a. Var v => FilePath -> Name -> Maybe FilePath -> IO (Runtime v) -> Codebase IO v a -> IO ()
 main dir currentBranchName initialFile startRuntime codebase = do
@@ -98,6 +94,8 @@ main dir currentBranchName initialFile startRuntime codebase = do
         Nothing -> putStrLn "Exiting."
     Just b  -> go0 b currentBranchName queue lineQueue lastTypechecked runtime
   where
+  go0 :: Branch -> Name -> TQueue Event -> TQueue Char
+      -> IORef (UF.TypecheckedUnisonFile v Parser.Ann) -> Runtime v -> IO ()
   go0 branch branchName queue lineQueue lastTypechecked runtime = go branch branchName
     where
 
@@ -183,7 +181,7 @@ main dir currentBranchName initialFile startRuntime codebase = do
     processLine :: Branch -> Name -> IO ()
     processLine branch name = do
       let takeActualLine = atomically $ takeLine lineQueue
-      line <- takeActualLine
+      (Line line) <- takeActualLine
       case words line of
         "add" : args -> addDefinitions branch name args
 
@@ -240,7 +238,7 @@ main dir currentBranchName initialFile startRuntime codebase = do
             ([_term], [_typ]) -> do
               putStrLn "Do you want to rename the [term], [type], [both], or [neither]?"
               putStr ">> "
-              (atomically . fmap words . takeLine) lineQueue >>= \case
+              (atomically . fmap words . fmap getKeyboardInput . takeLine) lineQueue >>= \case
                 ["term"] -> renameTerm branch >>= go'
                 ["type"] -> renameType branch >>= go'
                 ["both"] -> renameTerm branch >>= renameType >>= go'
@@ -255,37 +253,33 @@ main dir currentBranchName initialFile startRuntime codebase = do
 
 -- should never block
 peekIncompleteLine :: TQueue Char -> STM String
-peekIncompleteLine q = TQueue.tryPeekWhile (/= '\n') q
+peekIncompleteLine q = TQueue.tryPeekWhile (not . (`elem` "\n")) q
+
+data KeyboardInput
+  = Line { getKeyboardInput :: String }
+  | Tab { getKeyboardInput :: String }
+  | Esc
+
+controlChars :: [Char]
+controlChars = ['\LF','\HT','\ESC']
 
 -- block until a full line is available
-takeLine :: TQueue Char -> STM String
+takeLine :: TQueue Char -> STM KeyboardInput
 takeLine q = do
-  line <- TQueue.takeWhile (/= '\n') q
+  line <- TQueue.takeWhile (not . (`elem` controlChars)) q
   ch <- TQueue.dequeue q
-  if (ch /= '\n') then error "unpossibility in takeLine" else pure line
+  case ch of
+    '\LF' -> pure (Line line)
+    '\HT' -> pure (Tab line)
+    '\ESC' -> pure Esc
+    x ->
+      if x `elem` controlChars
+      then error $ "control character " ++ show x ++ "not matched in takeLine"
+      else error "unpossibility in takeLine"
 
--- blocks until a line ending in '\n' is available
+-- blocks until a line ending in a control char is available
 awaitCompleteLine :: TQueue Char -> STM ()
-awaitCompleteLine ch = void $ TQueue.peekWhile (/= '\n') ch
-
--- let the user pick from a list of labeled `a`s
--- todo: rewrite this to let them toggle stuff
-_multipleChoice :: [(String, a)] -> TQueue Char -> IO [a]
-_multipleChoice as lineQueue = do
-  let render ((s, _), index) = putStrLn $ strPadLeft ' ' 5 ("[" ++ show index ++ "] ") ++ s
-  traverse_ render (as `zip` [(1::Int)..])
-  putStrLn "Please enter your selection as a space separated list of numbers."
-  putStr ">> "
-  numbers <- (atomically . fmap words . takeLine) lineQueue
-  case traverse Read.readMaybe numbers of
-    Nothing ->
-      putStrLn "Sorry, I couldn't understand at least one of those numbers."
-      >> _multipleChoice as lineQueue
-    Just numbers -> case find (\i -> i < 1 || i > length as) numbers of
-      Just i ->
-        (putStrLn $ "You entered the number " ++ show i ++ " which wasn't one of the choices.")
-          >> _multipleChoice as lineQueue
-      Nothing -> pure $ snd . (as !!) . (+ (-1)) <$> numbers
+awaitCompleteLine q = void $ TQueue.peekWhile (not . (`elem` controlChars)) q
 
 -- Merges `branch` into any the branch `name`, creating it if necessary.
 mergeBranchAndShowDiff :: Monad m => Codebase m v a -> Name -> Branch -> m Branch
@@ -296,37 +290,5 @@ mergeBranchAndShowDiff codebase targetName sourceBranch = do
   --           ++ "and I went ahead and smashed it all together for you!"
   pure branch'
 
-foo :: Text -> (String, Text)
-foo name = (unpack name, name)
-
-selectBranch :: Codebase IO v a -> Name -> IO String -> IO (Maybe (Name, Branch))
-selectBranch codebase name takeLine = do
-  let branchMenu caption branches =
-        Menu.menu1
-          takeLine -- console
-          caption -- caption
-          (fromString . unpack) -- render
-          (fromString . fmap Char.toLower . show) -- renderMeta
-          (foo <$> branches) -- groups
-          [("create", Create), ("cancel", Cancel)] -- metas
-          Nothing -- initial
-
-  branch <- Codebase.getBranch codebase name
-  case branch of
-    -- if branch named `name` exists, load it,
-    Just branch -> pure . Just $ (name, branch)
-    -- otherwise,
-      -- list branches that do exist, plus option to create, plus option to cancel
-    Nothing -> do
-      let caption = fromString $
-            "The branch " ++ show name ++ " doesn't exist. " ++
-             "Do you want to create it, or pick a different one?"
-      branches <- Codebase.branches codebase
-      choice <- branchMenu caption branches
-      case choice of
-        Just (Left Cancel) -> pure Nothing
-        Just (Left Create) -> do
-          branch <- mergeBranchAndShowDiff codebase name mempty
-          pure $ Just (name, branch)
-        Just (Right name) -> selectBranch codebase name takeLine
-        Nothing -> pure Nothing
+selectBranch :: a
+selectBranch = error "todo"
