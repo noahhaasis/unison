@@ -5,7 +5,7 @@
 module Unison.Codebase.CommandLine (main) where
 
 import           Control.Concurrent           (forkIO)
-import           Control.Exception            (finally)
+import           Control.Exception            (catch, finally)
 import           Control.Monad                (forM_, forever, liftM2,
                                                void, when)
 import           Control.Monad.STM            (STM, atomically)
@@ -20,6 +20,7 @@ import           Data.Text                    (Text, pack, unpack)
 import qualified Data.Text.IO
 import qualified System.Console.ANSI          as Console
 import           System.FilePath              (FilePath)
+import           System.IO.Error              (isEOFError)
 -- import qualified Text.Read                    as Read
 import           Unison.Codebase              (Codebase)
 import qualified Unison.Codebase              as Codebase
@@ -50,6 +51,7 @@ import qualified Data.Map as Map
 data Event
   = UnisonFileChanged FilePath Text
   | UnisonBranchChanged (Set Name)
+  | EOF
 
 allow :: FilePath -> Bool
 allow = liftM2 (||) (".u" `isSuffixOf`) (".uu" `isSuffixOf`)
@@ -70,7 +72,8 @@ main dir currentBranchName initialFile startRuntime codebase = do
     _ -> pure ()
 
   -- enqueue stdin into lineQueue
-  void . forkIO . forever $ getChar >>= atomically . TQueue.enqueue lineQueue
+  void . forkIO . (`catch` eofHandler queue) . forever $
+    getChar >>= atomically . TQueue.enqueue lineQueue
 
   -- watch for .u file changes
   void . forkIO $ do
@@ -94,6 +97,8 @@ main dir currentBranchName initialFile startRuntime codebase = do
         Nothing -> putStrLn "Exiting."
     Just b  -> go0 b currentBranchName queue lineQueue lastTypechecked runtime
   where
+  eofHandler queue e =
+    if isEOFError e then (atomically . TQueue.enqueue queue) EOF else ioError e
   go0 :: Branch -> Name -> TQueue Event -> TQueue Char
       -> IORef (UF.TypecheckedUnisonFile v Parser.Ann) -> Runtime v -> IO ()
   go0 branch branchName queue lineQueue lastTypechecked runtime = go branch branchName
@@ -145,6 +150,7 @@ main dir currentBranchName initialFile startRuntime codebase = do
       TQueue.raceIO (TQueue.peek queue) (awaitCompleteLine lineQueue) >>= \case
         Right _ -> processLine branch name
         Left _ -> atomically (TQueue.dequeue queue) >>= \case
+          EOF -> putStrLn "^D"
           UnisonFileChanged filePath text -> do
             Console.setTitle "Unison"
             Console.clearScreen
