@@ -103,6 +103,36 @@ main dir currentBranchName initialFile startRuntime codebase = do
       -> IORef (UF.TypecheckedUnisonFile v Parser.Ann) -> Runtime v -> IO ()
   go0 branch branchName queue lineQueue lastTypechecked runtime = go branch branchName
     where
+    go :: Branch -> Name -> IO ()
+    go branch name = do
+      printPrompt name
+
+      -- wait for new lines from user or asynchronous events from filesystem
+      TQueue.raceIO (TQueue.peek queue) (awaitCompleteLine lineQueue) >>= \case
+        Right _ -> processLine branch name
+        Left _ -> atomically (TQueue.dequeue queue) >>= \case
+          EOF -> putStrLn "^D"
+          UnisonFileChanged filePath text -> do
+            Console.setTitle "Unison"
+            Console.clearScreen
+            Console.setCursorPosition 0 0
+            handleUnisonFile runtime codebase Parser.penv0 filePath text -- todo: don't use penv0
+            go branch name
+          UnisonBranchChanged branches ->
+            if Set.member name branches then do
+              b' <- Codebase.getBranch codebase name
+              case b' of
+                Just b' -> do
+                  when (branch /= b') $ do
+                    putStrLn "I've merged some external changes to the branch."
+                    putStrLn $ "TODO: tell the user what changed as a result of the merge"
+                  go b' name
+                Nothing -> do
+                  putStrLn $ "The current branch was deleted by some external process, "
+                              ++ "so I'm going to re-save what I have in memory."
+                  branch' <- mergeBranchAndShowDiff codebase name branch
+                  go branch' name
+            else go branch name
 
     -- print prompt and whatever input was on it / at it
     printPrompt :: Name -> IO ()
@@ -141,37 +171,6 @@ main dir currentBranchName initialFile startRuntime codebase = do
             putStrLn . show . Color.renderDocANSI 6 $
               prettyTopLevelComponents components errorEnv
             RT.evaluate runtime unisonFile codebase
-
-    go :: Branch -> Name -> IO ()
-    go branch name = do
-      printPrompt name
-
-      -- wait for new lines from user or asynchronous events from filesystem
-      TQueue.raceIO (TQueue.peek queue) (awaitCompleteLine lineQueue) >>= \case
-        Right _ -> processLine branch name
-        Left _ -> atomically (TQueue.dequeue queue) >>= \case
-          EOF -> putStrLn "^D"
-          UnisonFileChanged filePath text -> do
-            Console.setTitle "Unison"
-            Console.clearScreen
-            Console.setCursorPosition 0 0
-            handleUnisonFile runtime codebase Parser.penv0 filePath text -- todo: don't use penv0
-            go branch name
-          UnisonBranchChanged branches ->
-            if Set.member name branches then do
-              b' <- Codebase.getBranch codebase name
-              case b' of
-                Just b' -> do
-                  when (branch /= b') $ do
-                    putStrLn "I've merged some external changes to the branch."
-                    putStrLn $ "TODO: tell the user what changed as a result of the merge"
-                  go b' name
-                Nothing -> do
-                  putStrLn $ "The current branch was deleted by some external process, "
-                              ++ "so I'm going to re-save what I have in memory."
-                  branch' <- mergeBranchAndShowDiff codebase name branch
-                  go branch' name
-            else go branch name
 
     -- Looks at `lastTypechecked` for matching definitions and lets the user
     -- add them to the codebase. Present the user with a menu if args doesn't
