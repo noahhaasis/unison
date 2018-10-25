@@ -91,10 +91,13 @@ main dir currentBranchName initialFile startRuntime codebase = do
   -- load current branch from disk
   branch <- Codebase.getBranch codebase currentBranchName
   (`finally` (RT.terminate runtime *> cancelExternalBranchUpdates)) $ case branch of
-    Nothing -> do
-      selectBranch codebase currentBranchName takeActualLine >>= \case
-        Just (name, branch) -> go0 branch name queue lineQueue lastTypechecked runtime
-        Nothing -> putStrLn "Exiting."
+    Nothing -> selectBranch codebase currentBranchName takeActualLine >>= \case
+      Just (name, branch) -> go0 branch name queue lineQueue lastTypechecked runtime
+      Nothing -> putStrLn "Exiting."
+    -- do
+    --   selectBranch codebase currentBranchName takeActualLine >>= \case
+    --     Just (name, branch) -> go0 branch name queue lineQueue lastTypechecked runtime
+    --     Nothing -> putStrLn "Exiting."
     Just b  -> go0 b currentBranchName queue lineQueue lastTypechecked runtime
   where
   eofHandler queue e =
@@ -297,3 +300,6 @@ mergeBranchAndShowDiff codebase targetName sourceBranch = do
 
 selectBranch :: a
 selectBranch = error "todo"
+
+_explainDiff :: Branch.Diff -> String
+_explainDiff _ = "TODO: a description of <diff>."
